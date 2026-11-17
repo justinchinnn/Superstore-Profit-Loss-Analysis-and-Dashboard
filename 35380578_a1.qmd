@@ -1,0 +1,565 @@
+---
+title: "assignment1"
+author: "Chin Rong Sheng (35380578)"
+format: html
+editor: visual
+---
+
+```{r}
+#install.packages("readxl")
+#install.packages("dplyr")
+
+library(readxl)
+library(dplyr)
+
+## get the details of the dataset
+ss_df <- read_excel("/Users/justin/Documents/monash/etw2001/superstore.xlsx")
+
+dim(ss_df)
+str(ss_df)
+colnames(ss_df)
+head(ss_df)
+```
+
+## Question 1
+
+```{r}
+# get countries with more than 200 records
+ss_country_counts <- ss_df %>% count(Country) %>% filter(n > 200)
+
+# select only these countries in a df
+ss_countries_200 <- ss_df %>% filter(Country %in% ss_country_counts$Country)
+
+# compute average shipping cost per country
+ss_avg_ship_cost <- ss_countries_200 %>% group_by(Country) %>% 
+  mutate(avg_ship_cost = mean(Shipping.Cost, na.rm = TRUE)) %>%
+  ungroup()
+
+# filter the records with above average shipping cost 
+ss_above_avg_ship <- ss_avg_ship_cost %>% filter(Shipping.Cost > avg_ship_cost)
+
+# create new ratio
+ss_ratio <- ss_above_avg_ship %>% mutate(ratio = Profit / Shipping.Cost)
+
+# rank the top 15 records
+q1_answers <- ss_ratio %>% arrange(desc(ratio)) %>%
+  select(Customer.Name, Product.Name, Country, Sales, Profit, Shipping.Cost, ratio) %>%
+  head(15)
+
+q1_answers
+```
+
+## Question 2
+
+```{r}
+# remove transactions with zero or negative sales
+ss_pos_sales <- ss_df %>% filter(Sales > 0)
+
+# compute average profit and average sales per market-year
+ss_avg_profit <- ss_pos_sales %>% 
+  group_by(Market, Year) %>% 
+  summarise(
+    avg_profit = mean(Profit, na.rm = TRUE),
+    avg_sales = mean(Sales, na.rm = TRUE),
+    order_count = n(),
+    .groups = "drop"
+  )
+
+# keep market-year groups that have at least 50 orders
+ss_groups_50 <- ss_avg_profit %>% 
+  filter(order_count >= 50)
+
+# compute overall median profit from the full dataset
+ss_median_profit <- median(ss_df$Profit, na.rm = TRUE)
+
+# get the markets where the yearly average profit never drops below median
+ss_above_med_markets <- ss_groups_50 %>% 
+  group_by(Market) %>% 
+  filter(all(avg_profit >= ss_median_profit)) %>% 
+  ungroup()
+
+# compute average sales per market from the remaining group-level records
+ss_market_avg_sales <- ss_above_med_markets %>%
+  group_by(Market) %>%
+  summarise(avg_sales_overall = mean(avg_sales), .groups = "drop")
+
+# rank by descending average sales and show top 10
+q2_answers <- ss_market_avg_sales %>% 
+  arrange(desc(avg_sales_overall)) %>% 
+  head(10)
+
+q2_answers
+```
+
+## Question 3
+
+```{r}
+# compute IQR-based threshold for "unusually high" discount per sub-category
+ss_discount_stats <- ss_df %>%
+  group_by(Sub.Category) %>%
+  summarise(
+    q3_discount = quantile(Discount, 0.75, na.rm = TRUE),
+    iqr_discount = IQR(Discount, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# define unusually high as above Q3 + 1.5 * IQR (statistical outlier)
+ss_discount_stats <- ss_discount_stats %>%
+  mutate(high_threshold = q3_discount + 1.5 * iqr_discount)
+
+# join threshold back to original df
+ss_with_threshold <- ss_df %>%
+  left_join(ss_discount_stats, by = "Sub.Category")
+
+# flag records where discount is unusually high (above outlier threshold)
+ss_sus <- ss_with_threshold %>%
+  filter(Discount > high_threshold)
+
+# label each suspicious record as loss-making or non-loss-making
+ss_sus_labels <- ss_sus %>%
+  mutate(label = ifelse(Profit < 0, "loss-making", "non-loss-making"))
+
+# count suspicious records by market, segment and label
+ss_counts <- ss_sus_labels %>%
+  group_by(Market, Segment, label) %>%
+  summarise(count = n(), .groups = "drop")
+
+# compute total suspicious records per market-segment
+ss_total_sus <- ss_sus_labels %>%
+  group_by(Market, Segment) %>%
+  summarise(total = n(), .groups = "drop")
+
+# join counts with totals
+ss_share <- ss_counts %>%
+  left_join(ss_total_sus, by = c("Market", "Segment"))
+
+# compute loss-making share
+ss_share_pct <- ss_share %>%
+  mutate(loss_share = count / total)
+
+# keep only loss-making rows
+ss_loss <- ss_share_pct %>%
+  filter(label == "loss-making")
+
+# keep only combinations where loss-making share is above 40%
+ss_above_40 <- ss_loss %>%
+  filter(loss_share > 0.40)
+
+# sort from highest to lowest loss-making share
+q3_answers <- ss_above_40 %>%
+  arrange(desc(loss_share))
+
+q3_answers
+```
+
+## Question 4
+
+```{r}
+# initialise variables to stop at
+running_total <- 0
+stop_at_row <- NA
+stop_at_order_id <- NA
+stop_at_customer <- NA
+
+# loop through each row in dataset order
+for (i in 1:nrow(ss_df)) {
+  
+  # skip rows where quantity is less than 2
+  if (ss_df$Quantity[i] < 2) next
+  running_total <- running_total + ss_df$Profit[i] # sum up 
+  
+  # check if total exceeds 25000
+  if (running_total > 25000) {
+    stop_at_row <- i
+    stop_at_order_id <- ss_df$Order.ID[i]
+    stop_at_customer <- ss_df$Customer.Name[i]
+    break
+  }
+}
+
+# results for dataset order
+cat("----- Original dataset order -----\n")
+cat("Stop at row:", stop_at_row, "\n")
+cat("Order ID:", stop_at_order_id, "\n")
+cat("Customer name:", stop_at_customer, "\n")
+cat("Running total:", running_total, "\n")
+cat("\n")
+
+# reorder dataset by sales descending
+ss_desc_df <- ss_df %>% arrange(desc(Sales))
+
+# reinitialise variables to stop at
+running_total_desc <- 0
+stop_at_row_desc <- NA
+stop_at_order_id_desc <- NA
+stop_at_customer_desc <- NA
+
+# loop through each row in descending order
+for (i in 1:nrow(ss_desc_df)) {
+  
+  # skip rows where quantity is less than 2
+  if (ss_desc_df$Quantity[i] < 2) next
+  
+  # sum up running total
+  running_total_desc <- running_total_desc + ss_desc_df$Profit[i]
+  
+  # check if total exceeds 25000
+  if (running_total_desc > 25000) {
+    stop_at_row_desc <- i
+    stop_at_order_id_desc <- ss_desc_df$Order.ID[i]
+    stop_at_customer_desc <- ss_desc_df$Customer.Name[i]
+    break
+  }
+}
+
+# results for descending sales order
+cat("----- Sorted by descending sales order -----\n")
+cat("Stop at row:", stop_at_row_desc, "\n")
+cat("Order ID:", stop_at_order_id_desc, "\n")
+cat("Customer name:", stop_at_customer_desc, "\n")
+cat("Running total:", running_total_desc, "\n")
+```
+
+## Question 5
+
+```{r}
+# count distinct countries per product
+ss_country_count <- ss_df %>%
+  group_by(Product.Name) %>%
+  summarise(country_count = n_distinct(Country))
+
+# keep only products sold in at least 4 different countries
+ss_products_4 <- ss_country_count %>%
+  filter(country_count >= 4)
+
+# get the product names
+ss_product_names <- ss_products_4$Product.Name
+
+# filter main df to only those products
+ss_resilient_df <- ss_df %>%
+  filter(Product.Name %in% ss_product_names)
+
+# compute median discount per product
+ss_product_median_discount <- ss_resilient_df %>%
+  group_by(Product.Name) %>%
+  summarise(median_discount = median(Discount, na.rm = TRUE))
+
+# join median discount back to filtered df
+ss_resilient_with_median <- ss_resilient_df %>%
+  left_join(ss_product_median_discount, by = "Product.Name")
+
+# split into high discount records
+ss_high_discount <- ss_resilient_with_median %>%
+  filter(Discount > median_discount)
+
+# split into low discount records
+ss_low_discount <- ss_resilient_with_median %>%
+  filter(Discount <= median_discount)
+
+# compute average profit for high discount records per product
+ss_avg_profit_high <- ss_high_discount %>%
+  group_by(Product.Name) %>%
+  summarise(avg_profit_high = mean(Profit, na.rm = TRUE))
+
+# compute average profit for low discount records per product
+ss_avg_profit_low <- ss_low_discount %>%
+  group_by(Product.Name) %>%
+  summarise(avg_profit_low = mean(Profit, na.rm = TRUE))
+
+# join high and low average profits together
+ss_profit_compare <- ss_avg_profit_high %>%
+  inner_join(ss_avg_profit_low, by = "Product.Name")
+
+# compute the gap between high and low discount average profit
+ss_profit_gap <- ss_profit_compare %>%
+  mutate(gap = avg_profit_high - avg_profit_low)
+
+# keep only products where high discount condition performs better
+ss_resilient_products <- ss_profit_gap %>%
+  filter(gap > 0)
+
+# order by size of gap and show top 5
+q5_answers <- ss_resilient_products %>%
+  arrange(desc(gap)) %>%
+  head(5)
+
+q5_answers
+```
+
+## Question 6
+
+```{r}
+# compute total sales per market
+ss_market_sales <- ss_df %>%
+  group_by(Market) %>%
+  summarise(market_total_sales = sum(Sales, na.rm = TRUE))
+
+# compute total sales per market and city
+ss_city_sales <- ss_df %>%
+  group_by(Market, City) %>%
+  summarise(city_total_sales = sum(Sales, na.rm = TRUE))
+
+# join city sales with market total sales
+ss_city_share <- ss_city_sales %>%
+  left_join(ss_market_sales, by = "Market")
+
+# compute each city's share of its market's sales
+ss_city_share_pct <- ss_city_share %>%
+  mutate(city_share = city_total_sales / market_total_sales)
+
+# join city share back to original df to get segment info
+ss_with_share <- ss_df %>%
+  left_join(ss_city_share_pct, by = c("Market", "City"))
+
+# get distinct market, city, segment, city_share combinations
+ss_city_segment_share <- ss_with_share %>%
+  select(Market, City, Segment, city_share) %>%
+  distinct()
+
+# for each market and segment, find the city with the greatest share
+ss_dominant_city <- ss_city_segment_share %>%
+  group_by(Market, Segment) %>%
+  filter(city_share == max(city_share))
+
+# keep only cases where one city contributes more than one third of market sales
+ss_above_third <- ss_dominant_city %>%
+  filter(city_share > 1/3)
+
+# sort by descending sales share and show top 10
+q6_answers <- ss_above_third %>%
+  arrange(desc(city_share)) %>%
+  select(Market, Segment, City, city_share) %>%
+  head(10)
+
+q6_answers
+
+# Explanation: No city is found to contribute more than one-third (33.3%) of its
+# market's total sales. The highest city-level share is approximately 12.4%, 
+# which is Montréal within the Canada market.
+```
+
+## Question 7
+
+```{r}
+# extract month from order date and filter for Q4 (Oct, Nov, Dec)
+ss_q4 <- ss_df %>%
+  mutate(month = as.integer(format(Order.Date, "%m"))) %>%
+  filter(month %in% c(10, 11, 12))
+
+# create profitability score that penalizes discount and shipping cost
+ss_scored <- ss_q4 %>%
+  mutate(profit_score = Profit - (Discount * Sales) - Shipping.Cost)
+
+# compute total score per product within each region and year
+ss_product_scores <- ss_scored %>%
+  group_by(Region, Year, Product.Name) %>%
+  summarise(total_score = sum(profit_score, na.rm = TRUE), .groups = "drop")
+
+# find top scoring product per region and year (allow ties)
+ss_top_products <- ss_product_scores %>%
+  group_by(Region, Year) %>%
+  slice_max(total_score, with_ties = TRUE) %>%
+  ungroup()
+
+# count how many times each product appears as top scorer within each region
+ss_product_count <- ss_top_products %>%
+  group_by(Region, Product.Name) %>%
+  summarise(times_top = n(), .groups = "drop")
+
+# keep all products with max frequency per region (allow ties)
+ss_most_frequent <- ss_product_count %>%
+  group_by(Region) %>%
+  filter(times_top == max(times_top)) %>%
+  ungroup()
+
+# arrange by region
+q7_answers <- ss_most_frequent %>%
+  arrange(Region, desc(times_top))
+
+View(q7_answers)
+```
+
+## Question 8
+
+```{r}
+# compute shipping days
+ss_ship <- ss_df %>%
+  mutate(ship_days = as.numeric(as.Date(Ship.Date) - as.Date(Order.Date)))
+
+# remove records with missing or impossible date gaps
+ss_ship_clean <- ss_ship %>%
+  filter(!is.na(ship_days) & ship_days >= 0)
+
+# convert priority into numeric levels (higher number = higher urgency)
+ss_ship_clean <- ss_ship_clean %>%
+  mutate(priority_level = case_when(
+    Order.Priority == "Low" ~ 1,
+    Order.Priority == "Medium" ~ 2,
+    Order.Priority == "High" ~ 3,
+    Order.Priority == "Critical" ~ 4
+  ))
+
+# compute average ship days per ship mode and priority level
+ss_avg_ship_days <- ss_ship_clean %>%
+  group_by(Ship.Mode, priority_level) %>%
+  summarise(avg_days = mean(ship_days, na.rm = TRUE), .groups = "drop")
+
+# compare all priority pairs within the same ship mode
+ss_comparison <- ss_avg_ship_days %>%
+  inner_join(ss_avg_ship_days, by = "Ship.Mode", suffix = c("_low", "_high"), relationship = "many-to-many") %>%
+  filter(priority_level_low < priority_level_high & avg_days_low < avg_days_high)
+
+# get all distinct ship modes
+ss_all_modes <- ss_ship_clean %>%
+  distinct(Ship.Mode)
+
+# count surprising cases per ship mode (including 0 cases)
+q8_answers <- ss_comparison %>%
+  group_by(Ship.Mode) %>%
+  summarise(surprise_count = n(), .groups = "drop") %>%
+  right_join(ss_all_modes, by = "Ship.Mode") %>%
+  mutate(surprise_count = ifelse(is.na(surprise_count), 0, surprise_count)) %>%
+  arrange(desc(surprise_count))
+
+q8_answers
+```
+
+## Question 9
+
+```{r}
+# compute total sales and profit per year and week
+ss_weekly <- ss_df %>%
+  group_by(Year, weeknum) %>%
+  summarise(
+    week_sales = sum(Sales, na.rm = TRUE),
+    week_profit = sum(Profit, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# compute total valid sales per year (only non-negative profit weeks)
+ss_year_total <- ss_weekly %>%
+  filter(week_profit >= 0) %>%
+  group_by(Year) %>%
+  summarise(year_total_sales = sum(week_sales, na.rm = TRUE), .groups = "drop")
+
+# get unique years sorted
+ss_years <- sort(unique(ss_df$Year))
+
+# initialise empty vectors to store results
+result_years <- c()
+result_trigger_week <- c()
+result_cum_sales <- c()
+result_weeks_counted <- c()
+
+# loop through each year
+for (yr in ss_years) {
+  
+  # get ALL weeks for this year sorted by week number
+  ss_yr_weeks <- ss_weekly %>%
+    filter(Year == yr) %>%
+    arrange(weeknum)
+  
+  # get 20% threshold for this year
+  ss_yr_threshold <- ss_year_total %>%
+    filter(Year == yr) %>%
+    pull(year_total_sales) * 0.20
+  
+  # initialise tracking variables
+  cum_sales <- 0
+  weeks_counted <- 0
+  trigger_week <- NA
+  
+  # loop through each week in order
+  for (i in 1:nrow(ss_yr_weeks)) {
+    
+    # skip weeks where profit is negative
+    if (ss_yr_weeks$week_profit[i] < 0) next
+    
+    # add week sales to cumulative total
+    cum_sales <- cum_sales + ss_yr_weeks$week_sales[i]
+    
+    # increment weeks counted
+    weeks_counted <- weeks_counted + 1
+    
+    # check if cumulative sales exceed 20% threshold
+    if (cum_sales > ss_yr_threshold) {
+      trigger_week <- ss_yr_weeks$weeknum[i]
+      break
+    }
+  }
+  
+  # append results to vectors
+  result_years <- c(result_years, yr)
+  result_trigger_week <- c(result_trigger_week, trigger_week)
+  result_cum_sales <- c(result_cum_sales, cum_sales)
+  result_weeks_counted <- c(result_weeks_counted, weeks_counted)
+}
+
+# combine vectors into a dataframe
+ss_results <- data.frame(
+  Year = result_years,
+  trigger_week = result_trigger_week,
+  cumulative_sales = result_cum_sales,
+  weeks_counted = result_weeks_counted
+)
+
+# sort by year
+q9_answers <- ss_results %>%
+  arrange(Year)
+
+q9_answers
+```
+
+## Question 10
+
+```{r}
+# aggregate totals at region, state and sub-category level
+ss_state_subcat <- ss_df %>%
+  group_by(Region, State, Sub.Category) %>%
+  summarise(
+    row_count = n(),
+    total_profit = sum(Profit, na.rm = TRUE),
+    total_sales = sum(Sales, na.rm = TRUE),
+    total_shipping = sum(Shipping.Cost, na.rm = TRUE),
+    total_quantity = sum(Quantity, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# keep only combinations with at least 30 rows
+ss_state_subcat_30 <- ss_state_subcat %>%
+  filter(row_count >= 30)
+
+# create profitability and shipping per unit metrics from totals
+ss_with_metrics <- ss_state_subcat_30 %>%
+  mutate(
+    profit_ratio = total_profit / total_sales,
+    ship_per_unit = total_shipping / total_quantity
+  )
+
+# compute dataset wide average profit ratio from group-level data
+ss_avg_profit_ratio <- mean(ss_with_metrics$profit_ratio, na.rm = TRUE)
+
+# compute dataset wide average shipping cost per unit from group-level data
+ss_avg_ship_per_unit <- mean(ss_with_metrics$ship_per_unit, na.rm = TRUE)
+
+# keep combinations below average profit ratio and above average shipping per unit
+ss_underperformers <- ss_with_metrics %>%
+  filter(
+    profit_ratio < ss_avg_profit_ratio &
+    ship_per_unit > ss_avg_ship_per_unit
+  )
+
+# rank by worst profitability within each region and keep top 3
+ss_top3 <- ss_underperformers %>%
+  group_by(Region) %>%
+  arrange(profit_ratio) %>%
+  slice_head(n = 3) %>%
+  ungroup()
+
+# select relevant columns and sort by region
+q10_answers <- ss_top3 %>%
+  select(Region, State, Sub.Category, profit_ratio, ship_per_unit) %>%
+  arrange(Region)
+
+q10_answers
+```
